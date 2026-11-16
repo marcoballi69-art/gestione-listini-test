@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scanner Gestione Listini</title>
+<script src="./html5-qrcode.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:5px;background:#f3f5f7;color:#202124;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+main{max-width:620px;margin:0 auto;padding:6px;background:#fff;border-radius:12px;box-shadow:0 2px 12px #00000012}
+button{width:100%;padding:11px;margin:4px 0;border:0;border-radius:10px;background:#1769aa;color:white;font-size:17px;font-weight:bold}
+button.finish{background:#188038}
+button:disabled{opacity:.55}
+#risultato{min-height:150px;padding:10px 8px;margin:4px 0;border:2px solid #1769aa;border-radius:10px;background:#eef6ff;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
+#esito{font-size:18px;line-height:1.15;font-weight:900;color:#1769aa}
+#risultato.success #esito{color:#188038}
+#risultato.missing #esito{color:#c5221f}
+#risultato.duplicate #esito{color:#b77900}
+#nome{font-size:21px;line-height:1.15;font-weight:700;overflow-wrap:anywhere}
+#prezzo{font-size:38px;line-height:1.05;font-weight:900;color:#111;margin-top:3px}
+#reader{width:100%;margin:3px 0 0}
+#reader video{object-fit:cover}
+@media(max-width:600px){
+  main{padding:5px}
+  #risultato{min-height:164px}
+  #esito{font-size:14px}
+  #nome{font-size:22px}
+  #prezzo{font-size:43px}
+  button{padding:11px}
+}
+</style>
+</head>
+<body>
+<main>
+<button id="avvia">AVVIA SCANNER</button>
+<div id="risultato" aria-live="polite">
+  <div id="esito">PRONTO</div>
+  <div id="nome"></div>
+  <div id="prezzo"></div>
+</div>
+<div id="reader"></div>
+<button id="fine" class="finish">FINE — TERMINA SCANSIONE</button>
+</main>
+<script>
+(() => {
+  const riquadro = document.getElementById('risultato');
+  const esito = document.getElementById('esito');
+  const nome = document.getElementById('nome');
+  const prezzo = document.getElementById('prezzo');
+  const avvia = document.getElementById('avvia');
+  const fine = document.getElementById('fine');
+  let scanner = null, attivo = false, ultimoCodice = '', ultimoInvio = 0;
+  let audioContext = null, terminato = false;
+
+  function mostra(titolo, nomeArticolo='', prezzoArticolo='', stato='') {
+    esito.textContent = titolo;
+    nome.textContent = nomeArticolo;
+    prezzo.textContent = prezzoArticolo;
+    riquadro.classList.remove('success', 'missing', 'duplicate');
+    if (stato) riquadro.classList.add(stato);
+  }
+
+  function beep() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audioContext = audioContext || new AC();
+      if (audioContext.state === 'suspended') audioContext.resume();
+      const now = audioContext.currentTime;
+      [1050, 1450].forEach((freq, i) => {
+        const start = now + i * 0.16;
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(freq, start);
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.85, start + 0.02);
+        gain.gain.setValueAtTime(0.85, start + 0.12);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+        osc.connect(gain);
+        gain.connect(audioContext.destination);
+        osc.start(start);
+        osc.stop(start + 0.19);
+      });
+    } catch(e) {}
+  }
+
+  function inviaCodice(codice) {
+    if (!window.opener || window.opener.closed) {
+      mostra('RIAPRI DA GESTIONE LISTINI');
+      return;
+    }
+    window.opener.postMessage({type:'GESTIONE_LISTINI_BARCODE', code:codice}, '*');
+  }
+
+  window.addEventListener('message', event => {
+    if (event.source !== window.opener) return;
+    const d = event.data;
+    if (!d || d.type !== 'GESTIONE_LISTINI_SCAN_RESULT') return;
+    if (d.found) {
+      beep();
+      if (d.duplicate) {
+        mostra('GIÀ PRESENTE', d.name || 'Articolo', d.price || '', 'duplicate');
+      } else {
+        mostra('ARTICOLO ACQUISITO', d.name || 'Articolo', d.price || '', 'success');
+      }
+    } else {
+      mostra('NON TROVATO', '', '', 'missing');
+    }
+  });
+
+  async function fermaScanner() {
+    if (scanner && attivo) {
+      try { await scanner.stop(); } catch(e) {}
+      try { await scanner.clear(); } catch(e) {}
+    }
+    attivo = false;
+    scanner = null;
+  }
+
+  avvia.addEventListener('click', async () => {
+    if (attivo || terminato) return;
+    if (typeof Html5Qrcode === 'undefined') {
+      mostra('SCANNER NON DISPONIBILE');
+      return;
+    }
+    avvia.disabled = true;
+    mostra('AVVIO…');
+    try {
+      scanner = new Html5Qrcode('reader');
+      const config = {
+        fps: 20,
+        qrbox: (viewfinderWidth, viewfinderHeight) => ({
+          width: Math.floor(viewfinderWidth * 0.94),
+          height: Math.floor(viewfinderHeight * 0.58)
+        }),
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.ITF
+        ],
+        rememberLastUsedCamera: true
+      };
+      await scanner.start({facingMode:'environment'}, config, decoded => {
+        const code = String(decoded || '').trim();
+        const now = Date.now();
+        if (!code || (code === ultimoCodice && now - ultimoInvio < 2200)) return;
+        ultimoCodice = code;
+        ultimoInvio = now;
+        inviaCodice(code);
+      }, () => {});
+      attivo = true;
+      avvia.textContent = 'FOTOCAMERA ATTIVA';
+      avvia.disabled = true;
+    } catch(e) {
+      mostra('ERRORE FOTOCAMERA');
+      scanner = null;
+      attivo = false;
+      avvia.disabled = false;
+      avvia.textContent = 'RIPROVA AD AVVIARE';
+    }
+  });
+
+  fine.addEventListener('click', async () => {
+    terminato = true;
+    fine.disabled = true;
+    await fermaScanner();
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({type:'GESTIONE_LISTINI_SCAN_FINISH'}, '*');
+    }
+    mostra('SCANSIONE TERMINATA');
+    setTimeout(() => { try { window.close(); } catch(e) {} }, 400);
+  });
+
+  window.addEventListener('pagehide', () => { fermaScanner(); });
+})();
+</script>
+</body>
+</html>
