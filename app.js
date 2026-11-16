@@ -3,7 +3,7 @@
 const DB_NAME = "gestione-listini-offline";
 const DB_VERSION = 1;
 let db, articles = [], currentItems = [], currentChoiceId = null;
-let scanner = null, lastScan = "", pdfPreviewRows = [], idleTimer = null;
+let scanner = null, lastScan = "", pdfPreviewRows = [], activeListino = null, idleTimer = null;
 let currentLanguage = "it";
 let recentScans = [], scanBusy = false, lastScanAt = 0, audioContext = null;
 let screenWakeLock = null;
@@ -103,8 +103,20 @@ async function ensureCustomer() {
 
 /* ARCHIVIO E RICERCA */
 function refreshListinoInfo() {
-  const activeName = localStorage.getItem("gestioneListiniNomeFile") || "";
-  $("listinoInfo").textContent = (activeName ? "Listino caricato: " + activeName + " — " : "") + articles.length + t(" articoli salvati sul dispositivo.");
+  const activeName = (activeListino && activeListino.name) || localStorage.getItem("gestioneListiniNomeFile") || "";
+  const activeCount = activeListino && Array.isArray(activeListino.rows) ? activeListino.rows.length : articles.length;
+  $("listinoInfo").textContent = (activeName ? "Listino caricato: " + activeName + " — " : "") + activeCount + t(" articoli nel listino.");
+}
+async function restoreActiveListino() {
+  const saved = await getValue("meta", "activeListino");
+  if (!saved || !saved.value || !Array.isArray(saved.value.rows) || !saved.value.rows.length) {
+    refreshListinoInfo();
+    return;
+  }
+  activeListino = saved.value;
+  localStorage.setItem("gestioneListiniNomeFile", activeListino.name || "");
+  renderPdfPreview(activeListino.rows, activeListino.name || "Listino caricato", true);
+  refreshListinoInfo();
 }
 async function refreshArticles() {
   articles = await all("articles");
@@ -388,8 +400,8 @@ async function startScanner() {
     message("scanMessage","La fotocamera richiede HTTPS. Apri l'app dal suo indirizzo GitHub Pages.");
     return;
   }
-  if(typeof Html5Qrcode==="undefined"){
-    message("scanMessage","Lettore codici non disponibile. Ricarica l'app con connessione e riprova.");
+  if(typeof Html5Qrcode==="undefined" || typeof Html5QrcodeSupportedFormats==="undefined"){
+    message("scanMessage","Lettore codici non disponibile. Ricarica l'app online e riprova.");
     return;
   }
 
@@ -399,27 +411,31 @@ async function startScanner() {
   message("scanMessage","Richiesta accesso alla fotocamera…");
   const button=$("startScan");
   try{
-    scanner=new Html5Qrcode("reader", {verbose:false});
-    const formats=[
-      Html5QrcodeSupportedFormats.EAN_13,
-      Html5QrcodeSupportedFormats.EAN_8,
-      Html5QrcodeSupportedFormats.UPC_A,
-      Html5QrcodeSupportedFormats.UPC_E,
-      Html5QrcodeSupportedFormats.CODE_128,
-      Html5QrcodeSupportedFormats.CODE_39,
-      Html5QrcodeSupportedFormats.ITF
-    ];
+    scanner=new Html5Qrcode("reader", {
+      verbose:false,
+      useBarCodeDetectorIfSupported:false,
+      formatsToSupport:[
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.ITF
+      ]
+    });
     const config={
-      fps:12,
-      qrbox:(width,height)=>({
-        width:Math.max(180,Math.floor(width*0.92)),
-        height:Math.max(90,Math.floor(height*0.42))
-      }),
+      fps:10,
       aspectRatio:1.777,
-      disableFlip:true,
-      formatsToSupport:formats,
-      rememberLastUsedCamera:true
+      disableFlip:false,
+      videoConstraints:{
+        facingMode:{ideal:"environment"},
+        width:{ideal:1920},
+        height:{ideal:1080}
+      }
     };
+    // Senza qrbox: il decoder analizza tutto il fotogramma, non una finestrella
+    // piccola che può tagliare le barre di un EAN lungo.
     await scanner.start({facingMode:"environment"},config,decodedText=>{
       const code=normalizeBarcodeCode(decodedText);
       const now=Date.now();
@@ -428,13 +444,13 @@ async function startScanner() {
       lastScanAt=now;
       scanBusy=true;
       Promise.resolve(onBarcode(code)).catch(error=>{
-        message("scanMessage","Errore durante l'acquisizione: "+(error&&error.message?error.message:"riprova"));
+        message("scanMessage","Errore durante la lettura: "+(error&&error.message?error.message:"riprova"));
       }).finally(()=>setTimeout(()=>{scanBusy=false;},500));
     },()=>{});
     button.textContent="Chiudi scanner";
     try{await prepareAudio();}catch(e){}
     try{await requestScreenWakeLock();}catch(e){}
-    message("scanMessage","Fotocamera attiva. Inquadra il codice EAN intero, in orizzontale e a fuoco.");
+    message("scanMessage","Fotocamera attiva. Inquadra tutto il codice a barre, orizzontale e a fuoco. Avvicina il telefono finché le barre risultano nitide.");
   }catch(e){
     try{if(scanner){await scanner.stop().catch(()=>{});await scanner.clear().catch(()=>{});}}catch(ignore){}
     scanner=null;
@@ -464,16 +480,26 @@ function normalizeBarcodeCode(value) {
 }
 async function onBarcode(code) {
   const scanned=normalizeBarcodeCode(code);
-  const a=articles.find(x=>normalizeBarcodeCode(x.code)===scanned && scanned!=="");
+  const a=articles.find(x=>{
+    const stored=normalizeBarcodeCode(x.code);
+    if(!stored||!scanned)return false;
+    // Un UPC-A a 12 cifre può essere stampato/archiviato come EAN-13 con zero iniziale.
+    return stored===scanned ||
+      (scanned.length===12 && stored==="0"+scanned) ||
+      (stored.length===12 && scanned==="0"+stored);
+  });
   if(a) {
-    if(!await ensureCustomer()) return;
+    if(!await ensureCustomer()) {
+      message("scanMessage","CODICE LETTO: "+scanned+" — ARTICOLO: "+a.name+" — "+priceText(a)+". Seleziona prima il cliente per aggiungerlo alla scelta.");
+      return;
+    }
     const added=addArticle(a);
     if (added) rememberRecentScan(a);
     beep(); vibrateScan();
-    message("scanMessage",(added?"TROVATO: ":"GIÀ PRESENTE: ")+a.name+" — "+priceText(a));
+    message("scanMessage",(added?"TROVATO: ":"GIÀ PRESENTE: ")+a.name+" — "+priceText(a)+" (codice "+scanned+")");
     return;
   }
-  message("scanMessage","Codice letto: "+scanned+". Articolo non presente nel listino: inseriscilo manualmente.");
+  message("scanMessage","Codice letto: "+scanned+". Articolo non presente nel listino caricato: inseriscilo manualmente.");
   $("manualAdd").classList.remove("hidden");
   $("manualName").value=""; $("manualQty").value=""; $("manualName").focus();
 }
@@ -497,7 +523,7 @@ async function mergeArticles(rows) {
 async function importCsv() {
   const file=$("csvFile").files[0];if(!file){alert("Seleziona un file CSV.");return;}
   try{const rows=parseCsv(await file.text());if(!rows.length)throw new Error("Nessun articolo riconosciuto.");
-    const n=await mergeArticles(rows);localStorage.setItem("gestioneListiniNomeFile",file.name);refreshListinoInfo();
+    const n=await mergeArticles(rows);activeListino=null;await removeRecord("meta","activeListino");localStorage.setItem("gestioneListiniNomeFile",file.name);refreshListinoInfo();
     message("importMessage", "Listino " + file.name + ": " + n + " articoli importati o aggiornati.");}
   catch(e){message("importMessage","Errore CSV: "+e.message);}
 }
@@ -509,7 +535,7 @@ async function importExcel() {
     const rows=data.filter(r=>r.length>=2&&r[0]&&r[1]).map(r=>({code:String(r[0]).trim(),name:String(r[1]).trim(),currency:"EUR",
       price:String(r[3]||r[2]||"").replace(",", "."),originalFields:{columns:r}}));
     if(!rows.length)throw new Error("Nessun articolo riconosciuto.");const n=await mergeArticles(rows);
-    localStorage.setItem("gestioneListiniNomeFile",file.name);refreshListinoInfo();
+    activeListino=null;await removeRecord("meta","activeListino");localStorage.setItem("gestioneListiniNomeFile",file.name);refreshListinoInfo();
     message("importMessage", "Listino " + file.name + ": " + n + " articoli importati o aggiornati.");}
   catch(e){message("importMessage","Errore Excel: "+e.message);}
 }
@@ -560,28 +586,45 @@ function parsePdfLines(lines) {
     out.push({code,name,price:String(price),currency:"EUR",originalFields:{originalLines:original,composition:compositionText,fullDescription:combined}});seen.add(code);
   }return out;
 }
-function renderPdfPreview(rows) {
+function renderPdfPreview(rows, listinoName="", imported=false) {
   const host=$("pdfPreviewList");host.replaceChildren();
   rows.forEach(a=>{const row=document.createElement("div");row.className="pdf-row";const info=document.createElement("div");
     const name=document.createElement("strong");name.textContent=a.name;const code=document.createElement("small");code.textContent="Codice "+a.code;
     info.append(name,code);const price=document.createElement("b");price.className="pdf-price";price.textContent=priceText(a);row.append(info,price);host.append(row);});
-  $("pdfPreviewCount").textContent=rows.length+" articoli riconosciuti";$("pdfPreview").classList.remove("hidden");
+  $("pdfPreviewCount").textContent=(imported?"Listino caricato: ":"Anteprima: ")+(listinoName?listinoName+" — ":"")+rows.length+" articoli";
+  $("confirmPdfImport").classList.toggle("hidden",imported);
+  $("cancelPdfImport").classList.toggle("hidden",imported);
+  $("pdfPreview").classList.remove("hidden");
 }
 async function readPdf() {
   const file=$("pdfFile").files[0];if(!file){alert("Seleziona prima un PDF.");return;}
   $("pdfPreview").classList.add("hidden");message("pdfMessage","Lettura del PDF in corso…");
   try{const lines=await extractPdfText(file);pdfPreviewRows=parsePdfLines(lines);
     if(!pdfPreviewRows.length){message("pdfMessage","Nessun articolo riconosciuto. Controlla il PDF e la qualità della scansione.");return;}
-    renderPdfPreview(pdfPreviewRows);message("pdfMessage","Controlla l'anteprima prima di importare.");}
+    renderPdfPreview(pdfPreviewRows,file.name,false);message("pdfMessage","Controlla l'anteprima prima di importare.");}
   catch(e){message("pdfMessage","Errore PDF: "+e.message);}
 }
 async function confirmPdfImport() {
   if(!pdfPreviewRows.length)return;
   if(!confirm("Importare o aggiornare "+pdfPreviewRows.length+" articoli? Gli altri articoli già presenti saranno conservati."))return;
-  const n=await mergeArticles(pdfPreviewRows);message("pdfMessage",n+" articoli importati o aggiornati.");
-  $("pdfPreview").classList.add("hidden");pdfPreviewRows=[];$("pdfFile").value="";
+  const file=$("pdfFile").files[0];
+  const listinoName=file?file.name:(activeListino&&activeListino.name)||"Listino PDF";
+  const rows=pdfPreviewRows.map(a=>({...a}));
+  const n=await mergeArticles(rows);
+  activeListino={name:listinoName,rows:rows,importedAt:new Date().toISOString()};
+  await put("meta",{key:"activeListino",value:activeListino});
+  localStorage.setItem("gestioneListiniNomeFile",listinoName);
+  refreshListinoInfo();
+  renderPdfPreview(rows,listinoName,true);
+  $("pdfFile").value="";
+  message("pdfMessage",n+" articoli importati/aggiornati. Il listino resta visibile qui sotto.");
 }
-function cancelPdfImport(){pdfPreviewRows=[];$("pdfPreview").classList.add("hidden");message("pdfMessage","Importazione annullata.");}
+function cancelPdfImport(){
+  pdfPreviewRows=[];
+  if(activeListino&&Array.isArray(activeListino.rows))renderPdfPreview(activeListino.rows,activeListino.name,true);
+  else $("pdfPreview").classList.add("hidden");
+  message("pdfMessage","Importazione annullata.");
+}
 
 /* DOCUMENTO */
 function escapeHtml(value){return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
@@ -692,7 +735,7 @@ async function unlockApp() {
 }
 async function unlockInterface() {
   $("authGate").classList.add("hidden");$("appShell").classList.remove("hidden");
-  await refreshArticles();await refreshCustomers();await renderSaved();renderRecentScans();configureIdleLock();
+  await refreshArticles();await restoreActiveListino();await refreshCustomers();await renderSaved();renderRecentScans();configureIdleLock();
 }
 function lockApp() {
   if($("appShell").classList.contains("hidden"))return;
@@ -1034,6 +1077,6 @@ document.addEventListener("visibilitychange",async()=>{if(document.visibilitySta
       else{$("authGate").classList.remove("hidden");$("passwordLogin").classList.remove("hidden");}
     }else{$("authGate").classList.remove("hidden");$("passwordSetup").classList.remove("hidden");}
     newChoice();
-    if("serviceWorker"in navigator){try{await navigator.serviceWorker.register("./sw.js?v=13");}catch(e){console.warn("Service worker non registrato",e);}}
+    if("serviceWorker"in navigator){try{await navigator.serviceWorker.register("./sw.js?v=15");}catch(e){console.warn("Service worker non registrato",e);}}
   }catch(e){alert("Errore inizializzazione archivio: "+e.message);}
 })();

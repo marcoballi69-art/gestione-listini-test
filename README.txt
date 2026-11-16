@@ -103,3 +103,24 @@ REVISIONE SCANNER v13
 - Rimane necessario verificare la lettura ottica su iPhone fisico; la sintassi
   e i collegamenti locali sono stati controllati, ma non equivalgono a una prova
   reale della fotocamera.
+
+
+REVISIONE v15 — SCANNER E LISTINO PDF PERSISTENTE
+- Scanner configurato per analizzare l'intero fotogramma (nessuna piccola area qrbox),
+  con fotocamera posteriore preferita e risoluzione ideale 1920x1080.
+- Disabilitato il BarcodeDetector nativo sperimentale: viene usato il decoder ZXing
+  incluso nella libreria locale html5-qrcode, per mantenere la decodifica EAN coerente.
+- Area video ampliata per facilitare la messa a fuoco dei codici a barre lineari.
+- Ricerca compatibile anche con UPC-A a 12 cifre e corrispondente EAN-13 con zero iniziale.
+- Dopo la scansione il nome dell'articolo viene mostrato anche se prima occorre selezionare
+  il cliente; in tal caso l'articolo non viene aggiunto finché il cliente non è selezionato.
+- Dopo l'importazione PDF restano visibili nome file e righe dell'anteprima; il riquadro
+  viene salvato in IndexedDB e ripristinato alla successiva apertura dell'app.
+- Versione cache service worker aggiornata a v15 per evitare di riutilizzare gli asset v13.
+
+VERIFICHE v15
+- Controllata la sintassi JavaScript con Node.js e l'integrità dello ZIP.
+- Controllati gli ID HTML usati dallo script e i collegamenti alla libreria scanner locale.
+- La documentazione ufficiale html5-qrcode conferma il supporto iOS Safari (iOS >= 15.1)
+  e i formati EAN-13/EAN-8/UPC-A/UPC-E.
+- Non è possibile certificare la lettura ottica reale senza prova su iPhone fisico.

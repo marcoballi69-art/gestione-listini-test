@@ -1,24 +1,22 @@
-GESTIONE LISTINI — VERSIONE DI PROVA v13
+GESTIONE LISTINI — VERSIONE DI PROVA v15
 
-Questa versione mantiene le funzioni dell'app e modifica il solo sistema di scansione.
-
-SCANNER
-- C'è un solo pulsante: "Apri fotocamera e scansiona".
-- Il lettore usa html5-qrcode, incluso localmente nella cartella scanner.
-- Non apre una finestra separata e non carica la libreria da Internet.
+MODIFICHE
+- Lo scanner usa la libreria html5-qrcode inclusa localmente.
+- Analizza tutto il fotogramma, senza ritagliare una piccola finestra centrale.
+- Preferisce la fotocamera posteriore e richiede una risoluzione ideale più alta.
+- Usa il decoder ZXing interno, senza BarcodeDetector nativo sperimentale.
 - Supporta EAN-13, EAN-8, UPC-A, UPC-E, Code 128, Code 39 e ITF.
-- Premi di nuovo il pulsante per chiudere lo scanner.
+- Se il codice viene trovato, mostra il nome dell'articolo e il prezzo.
+- Il nome viene mostrato anche se occorre prima selezionare un cliente.
+- Dopo l'importazione PDF, il nome del file e l'elenco degli articoli restano visibili
+  e vengono ripristinati quando si riapre l'app.
 
-PROVA ONLINE/OFFLINE
-1. Pubblica questa versione nel repository di prova, non in quello originale.
-2. Apri l'app una prima volta con Internet e attendi il caricamento completo.
-3. Consenti l'accesso alla fotocamera.
-4. Prova un codice EAN-13 e uno EAN-8.
-5. Poi disattiva la rete e riprova dopo aver verificato che l'app sia stata memorizzata.
+IMPORTANTE PER IPHONE
+- Aprire l'app dal sito GitHub Pages in Safari, con indirizzo HTTPS.
+- Consentire l'accesso alla fotocamera.
+- La libreria html5-qrcode dichiara supporto per iOS Safari da iOS 15.1.
+- La prova reale di lettura dipende da fotocamera, messa a fuoco, luce e dimensione del codice.
+- Questa revisione è stata controllata nel codice ma non può essere dichiarata collaudata
+  su iPhone fisico da questa sessione.
 
-NOTA IMPORTANTE
-Sono stati controllati i collegamenti ai file locali e la sintassi JavaScript.
-La lettura con fotocamera fisica su iPhone non può essere certificata senza
-una prova reale sul dispositivo.
-
-Non sostituire il repository originale.
+NON MODIFICARE IL REPOSITORY ORIGINALE.
