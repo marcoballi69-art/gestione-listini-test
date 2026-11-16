@@ -113,8 +113,8 @@ input,select,textarea{min-height:50px;font-size:1rem}
 </section>
 <section class="panel">
   <h2>2. Cerca e aggiungi articoli</h2><label for="search">Cerca per nome o codice</label><input id="search" type="search" placeholder="Scrivi il nome o il codice articolo">
-  <div class="row"><button id="openDedicatedScanner" class="success">Apri scanner dedicato</button><button id="startScan" class="secondary">Scanner integrato</button><button id="stopScan" class="secondary">Chiudi scanner integrato</button></div>
-  <p class="muted">Lo scanner dedicato si apre in una finestra separata e si collega automaticamente a questa app. In alternativa puoi usare lo scanner integrato.</p>
+  <div class="row"><button id="startScan" class="success">Apri fotocamera e scansiona</button></div>
+  <p class="muted">Inquadra il codice a barre intero, in orizzontale e ben illuminato. Premi di nuovo il pulsante per chiudere lo scanner.</p>
   <div id="reader" class="hidden"></div><div id="scanMessage" class="status">Scanner non avviato.</div>
   <div id="recentScanItems"></div><div id="results"></div>
 </section>
@@ -156,6 +156,7 @@ input,select,textarea{min-height:50px;font-size:1rem}
   <div class="divider"></div>
   <div class="row"><div><label for="csvFile">Listino CSV</label><input id="csvFile" type="file" accept=".csv,text/csv"><button id="importCsv" class="secondary">Importa CSV</button></div>
     <div><label for="excelFile">Listino Excel</label><input id="excelFile" type="file" accept=".xlsx,.xls"><button id="importExcel" class="secondary">Importa Excel</button></div></div>
+  <div class="muted" id="csvSelectedName">Nessun file CSV selezionato.</div><div class="muted" id="excelSelectedName">Nessun file Excel selezionato.</div>
   <div id="importMessage" class="status"></div><div id="listinoInfo" class="muted">Nessun listino caricato.</div>
 </section>
 <section class="panel">
@@ -186,6 +187,7 @@ input,select,textarea{min-height:50px;font-size:1rem}
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="./scanner/html5-qrcode.min.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>

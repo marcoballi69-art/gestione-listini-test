@@ -6,7 +6,7 @@ let db, articles = [], currentItems = [], currentChoiceId = null;
 let scanner = null, lastScan = "", pdfPreviewRows = [], idleTimer = null;
 let currentLanguage = "it";
 let recentScans = [], scanBusy = false, lastScanAt = 0, audioContext = null;
-let screenWakeLock = null, externalScannerWindow = null;
+let screenWakeLock = null;
 const $ = id => document.getElementById(id);
 
 function openDb() {
@@ -102,10 +102,18 @@ async function ensureCustomer() {
 }
 
 /* ARCHIVIO E RICERCA */
+function refreshListinoInfo() {
+  const activeName = localStorage.getItem("gestioneListiniNomeFile") || "";
+  $("listinoInfo").textContent = (activeName ? "Listino caricato: " + activeName + " — " : "") + articles.length + t(" articoli salvati sul dispositivo.");
+}
 async function refreshArticles() {
   articles = await all("articles");
-  $("listinoInfo").textContent = articles.length + t(" articoli salvati sul dispositivo.");
+  refreshListinoInfo();
   renderResults();
+}
+function showSelectedImportFile(inputId, labelId, fallback) {
+  const file = $(inputId).files && $(inputId).files[0];
+  $(labelId).textContent = file ? "File selezionato: " + file.name : fallback;
 }
 function renderResults() {
   const query = norm($("search").value), host = $("results");
@@ -357,182 +365,11 @@ async function releaseScreenWakeLock() {
   screenWakeLock=null;
 }
 
-/* SCANNER OFFLINE: BarcodeDetector quando disponibile + decoder EAN locale */
-let localScanStream = null, localScanVideo = null, localScanFrame = 0;
-let localScanCanvas = null, localScanContext = null, localScanBusy = false, localScanLastFrameAt = 0;
-const EAN_L = ["0001101","0011001","0010011","0111101","0100011","0110001","0101111","0111011","0110111","0001011"];
-const EAN_G = ["0100111","0110011","0011011","0100001","0011101","0111001","0000101","0010001","0001001","0010111"];
-const EAN_R = ["1110010","1100110","1101100","1000010","1011100","1001110","1010000","1000100","1001000","1110100"];
-const EAN_PARITY = ["LLLLLL","LLGLGG","LLGGLG","LLGGGL","LGLLGG","LGGLLG","LGGGLL","LGLGLG","LGLGGL","LGGLGL"];
-// Le sequenze di larghezza dei moduli sono precalcolate una sola volta:
-// evita di ricrearle per ogni riga e rende la scansione più fluida sui telefoni.
-const EAN_PATTERN_RUNS = (() => {
-  const toRuns = pattern => {
-    const out=[]; let last=pattern[0],count=1;
-    for(let i=1;i<pattern.length;i++){
-      if(pattern[i]===last)count++;
-      else{out.push(count);last=pattern[i];count=1;}
-    }
-    out.push(count); return out;
-  };
-  return {L:EAN_L.map(toRuns),G:EAN_G.map(toRuns),R:EAN_R.map(toRuns)};
-})();
-function decodeEanRow(imageData, forcedThreshold=null) {
-  const {data,width,height}=imageData;
-  if(!width||!height)return "";
-  const centerY=Math.floor((height-1)/2);
-  const firstY=Math.max(0,centerY-1),lastY=Math.min(height-1,centerY+1);
-  const gray=new Uint8Array(width),hist=new Uint32Array(256);
-  // Media di tre righe contigue: riduce rumore e artefatti del sensore.
-  for(let x=0;x<width;x++){
-    let luminance=0,count=0;
-    for(let y=firstY;y<=lastY;y++){
-      const k=(y*width+x)*4;
-      luminance+=data[k]*.299+data[k+1]*.587+data[k+2]*.114;
-      count++;
-    }
-    const v=Math.round(luminance/count);
-    gray[x]=v;hist[v]++;
-  }
-  let threshold=127;
-  if(Number.isFinite(forcedThreshold)) threshold=forcedThreshold;
-  else {
-    let total=0;for(let i=0;i<256;i++)total+=i*hist[i];
-    let sumB=0,wB=0,maxVariance=-1;
-    for(let i=0;i<256;i++){
-      wB+=hist[i];if(!wB)continue;
-      const wF=width-wB;if(!wF)break;
-      sumB+=i*hist[i];
-      const variance=wB*wF*Math.pow(sumB/wB-(total-sumB)/wF,2);
-      if(variance>maxVariance){maxVariance=variance;threshold=i;}
-    }
-  }
-  const bits=new Uint8Array(width);
-  for(let x=0;x<width;x++)bits[x]=gray[x]<=threshold?1:0;
-  const runs=[];let bit=bits[0],start=0;
-  for(let x=1;x<=width;x++){
-    if(x===width||bits[x]!==bit){runs.push({bit,start,len:x-start});if(x<width){bit=bits[x];start=x;}}
-  }
-  function matchDigit(group,kind,module){
-    if(group.length!==4)return null;
-    const total=group.reduce((s,r)=>s+r.len,0);
-    if(Math.abs(total/module-7)>.9)return null;
-    let best=-1,bestScore=Infinity;
-    for(let n=0;n<10;n++){
-      const expected=EAN_PATTERN_RUNS[kind][n];let score=0;
-      for(let j=0;j<4;j++)score+=Math.abs(group[j].len/module-expected[j]);
-      if(score<bestScore){bestScore=score;best=n;}
-    }
-    return bestScore<=1.45?{digit:best,score:bestScore}:null;
-  }
-  function guardOK(group,module){
-    return group.length===3&&group.every(r=>Math.abs(r.len/module-1)<=.8);
-  }
-  function centerOK(group,module){
-    return group.length===5&&group.every(r=>Math.abs(r.len/module-1)<=.85);
-  }
-  function checksum(digits){
-    const n=digits.length,check=digits[n-1];
-    let sum=0;
-    for(let i=0;i<n-1;i++)sum+=digits[i]*(((n===13?i%2===1:i%2===0)?3:1));
-    return (10-sum%10)%10===check;
-  }
-  for(let i=0;i+42<runs.length;i++){
-    if(runs[i].bit!==1||runs[i+1].bit!==0||runs[i+2].bit!==1)continue;
-    const module=(runs[i].len+runs[i+1].len+runs[i+2].len)/3;
-    if(module<.8||!guardOK(runs.slice(i,i+3),module))continue;
-    // EAN-13: start + 6 left digits + center + 6 right digits + end.
-    if(i+59<=runs.length){
-      let pos=i+3,left=[],parity="",valid=true;
-      for(let d=0;d<6;d++){
-        const group=runs.slice(pos,pos+4);pos+=4;
-        const l=matchDigit(group,"L",module),g=matchDigit(group,"G",module);
-        if(!l&&!g){valid=false;break;}
-        if(g&&(!l||g.score<l.score)){left.push(g.digit);parity+="G";}else{left.push(l.digit);parity+="L";}
-      }
-      if(valid&&centerOK(runs.slice(pos,pos+5),module)){
-        pos+=5;const right=[];
-        for(let d=0;d<6;d++){
-          const m=matchDigit(runs.slice(pos,pos+4),"R",module);pos+=4;
-          if(!m){valid=false;break;}right.push(m.digit);
-        }
-        if(valid&&guardOK(runs.slice(pos,pos+3),module)){
-          const first=EAN_PARITY.indexOf(parity),digits=[first,...left,...right];
-          if(first>=0&&checksum(digits))return digits.join("");
-        }
-      }
-    }
-    // EAN-8: start + 4 left digits + center + 4 right digits + end.
-    if(i+43<=runs.length){
-      let pos=i+3,left=[],valid=true;
-      for(let d=0;d<4;d++){
-        const m=matchDigit(runs.slice(pos,pos+4),"L",module);pos+=4;
-        if(!m){valid=false;break;}left.push(m.digit);
-      }
-      if(valid&&centerOK(runs.slice(pos,pos+5),module)){
-        pos+=5;const right=[];
-        for(let d=0;d<4;d++){
-          const m=matchDigit(runs.slice(pos,pos+4),"R",module);pos+=4;
-          if(!m){valid=false;break;}right.push(m.digit);
-        }
-        if(valid&&guardOK(runs.slice(pos,pos+3),module)){
-          const digits=[...left,...right];if(checksum(digits))return digits.join("");
-        }
-      }
-    }
-  }
-  return "";
-}
-function decodeLocalFrame(video) {
-  if(!localScanCanvas){
-    localScanCanvas=document.createElement("canvas");
-    localScanContext=localScanCanvas.getContext("2d",{willReadFrequently:true});
-  }
-  const w=video.videoWidth,h=video.videoHeight;
-  if(!w||!h||!localScanContext)return "";
-  const scale=Math.min(2,2800/w);
-  localScanCanvas.width=Math.round(w*scale);
-  localScanCanvas.height=Math.round(h*scale);
-  localScanContext.drawImage(video,0,0,localScanCanvas.width,localScanCanvas.height);
-  const cw=localScanCanvas.width,ch=localScanCanvas.height;
-  // Esamina 21 fasce dall'alto verso il basso. Ogni campione usa tre righe
-  // mediate, così una singola riga disturbata non blocca la lettura.
-  const fractions=[.10,.14,.18,.22,.26,.30,.34,.38,.42,.46,.50,.54,.58,.62,.66,.70,.74,.78,.82,.86,.90];
-  const thresholds=[null,110,145,180];
-  for(const fraction of fractions){
-    const y=Math.max(0,Math.min(ch-3,Math.floor(ch*fraction)-1));
-    const sample=localScanContext.getImageData(0,y,cw,3);
-    for(const threshold of thresholds){
-      const found=decodeEanRow(sample,threshold);
-      if(found)return found;
-    }
-  }
-  return "";
-}
-
-function waitForScannerVideo(video, timeoutMs=10000) {
-  return new Promise((resolve,reject)=>{
-    if(video.readyState>=2 && video.videoWidth>0){resolve();return;}
-    let timer=setTimeout(()=>finish(new Error("La fotocamera non ha avviato il video. Riprova.")),timeoutMs);
-    const ready=()=>{if(video.videoWidth>0)finish(null);};
-    const failed=()=>finish(new Error("Il video della fotocamera non è disponibile."));
-    function finish(error){
-      clearTimeout(timer);
-      video.removeEventListener("loadedmetadata",ready);
-      video.removeEventListener("canplay",ready);
-      video.removeEventListener("error",failed);
-      error?reject(error):resolve();
-    }
-    video.addEventListener("loadedmetadata",ready);
-    video.addEventListener("canplay",ready);
-    video.addEventListener("error",failed);
-  });
-}
-
+/* SCANNER: html5-qrcode locale, incluso nel progetto e disponibile offline */
 function scannerCameraError(error) {
   const name=error&&error.name?error.name:"";
   if(name==="NotAllowedError"||name==="PermissionDeniedError")
-    return "Permesso fotocamera negato. Consenti l'accesso alla fotocamera per questo sito nelle impostazioni di Safari.";
+    return "Permesso fotocamera negato. Consenti l'accesso alla fotocamera per questo sito nelle impostazioni del browser.";
   if(name==="NotFoundError"||name==="DevicesNotFoundError")
     return "Non trovo una fotocamera disponibile sul dispositivo.";
   if(name==="NotReadableError"||name==="TrackStartError")
@@ -543,148 +380,85 @@ function scannerCameraError(error) {
 }
 
 async function startScanner() {
-  if(scanner){message("scanMessage","Scanner già attivo.");return;}
+  if(scanner){
+    await stopScanner();
+    return;
+  }
   if(!window.isSecureContext){
     message("scanMessage","La fotocamera richiede HTTPS. Apri l'app dal suo indirizzo GitHub Pages.");
     return;
   }
-  if(!navigator.mediaDevices||typeof navigator.mediaDevices.getUserMedia!=="function"){
-    message("scanMessage","Questo browser non rende disponibile la fotocamera. Apri l'app con Safari aggiornato.");
+  if(typeof Html5Qrcode==="undefined"){
+    message("scanMessage","Lettore codici non disponibile. Ricarica l'app con connessione e riprova.");
     return;
   }
 
-  // Chiedi la fotocamera subito nel gesto del pulsante: su iOS è importante
-  // non anteporre altre operazioni asincrone alla richiesta dei permessi.
-  $("reader").classList.remove("hidden");
+  const reader=$("reader");
+  reader.classList.remove("hidden");
   $("results").classList.add("hidden");
   message("scanMessage","Richiesta accesso alla fotocamera…");
-
-  localScanVideo=document.createElement("video");
-  localScanVideo.setAttribute("playsinline","");
-  localScanVideo.setAttribute("webkit-playsinline","");
-  localScanVideo.setAttribute("autoplay","");
-  localScanVideo.setAttribute("muted","");
-  localScanVideo.playsInline=true;
-  localScanVideo.autoplay=true;
-  localScanVideo.muted=true;
-  localScanVideo.style.cssText="display:block;width:100%;max-width:360px;height:210px;max-height:30vh;min-height:145px;object-fit:contain;background:#000;border-radius:14px;margin:0 auto;";
-  $("reader").replaceChildren(localScanVideo);
-
+  const button=$("startScan");
   try{
-    let cameraPromise;
-    try{
-      cameraPromise=navigator.mediaDevices.getUserMedia({
-        audio:false,
-        video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}}
-      });
-      localScanStream=await cameraPromise;
-    }catch(firstError){
-      // Fallback solo se il browser non accetta il vincolo della fotocamera posteriore.
-      if(firstError&&["OverconstrainedError","NotFoundError"].includes(firstError.name)){
-        localScanStream=await navigator.mediaDevices.getUserMedia({audio:false,video:true});
-      }else{
-        throw firstError;
-      }
-    }
-
-    localScanVideo.srcObject=localScanStream;
-    await waitForScannerVideo(localScanVideo);
-    await localScanVideo.play();
-    scanner={active:true};
-
-    const track=localScanStream.getVideoTracks()[0];
-    try{
-      if(track&&track.getCapabilities&&track.applyConstraints){
-        const caps=track.getCapabilities(),advanced={};
-        if(caps.focusMode&&caps.focusMode.includes("continuous"))advanced.focusMode="continuous";
-        if(caps.zoom&&Number.isFinite(caps.zoom.max)&&caps.zoom.max>caps.zoom.min)
-          advanced.zoom=Math.min(caps.zoom.max,Math.max(caps.zoom.min,1.2));
-        if(Object.keys(advanced).length)await track.applyConstraints({advanced:[advanced]});
-      }
-    }catch(e){ /* I controlli autofocus/zoom non sono esposti da tutti gli iPhone. */ }
-
-    // Decoder EAN locale prioritario: non richiede Internet né librerie esterne.
-    // BarcodeDetector è solo un eventuale ripiego del browser.
-    let detector=null;
-    if("BarcodeDetector" in window){
-      try{
-        const wanted=["ean_13","ean_8"];
-        const supported=typeof BarcodeDetector.getSupportedFormats==="function"
-          ? await BarcodeDetector.getSupportedFormats() : wanted;
-        const formats=wanted.filter(format=>supported.includes(format));
-        if(formats.length)detector=new BarcodeDetector({formats});
-      }catch(e){detector=null;}
-    }
-
-    localScanBusy=false;
-    localScanLastFrameAt=0;
-    const tick=async()=>{
-      if(!scanner||!localScanVideo)return;
-      if(localScanVideo.readyState<2||!localScanVideo.videoWidth){
-        localScanFrame=requestAnimationFrame(tick);
-        return;
-      }
-      const now=performance.now();
-      if(!localScanBusy&&now-localScanLastFrameAt>=220){
-        localScanBusy=true;
-        localScanLastFrameAt=now;
-        try{
-          let code="";
-          // Il decoder incorporato viene eseguito sempre, anche completamente offline.
-          code=decodeLocalFrame(localScanVideo);
-          if(!code&&detector){
-            try{
-              const found=await detector.detect(localScanVideo);
-              if(found&&found.length)code=found[0].rawValue||"";
-            }catch(e){detector=null;}
-          }
-          if(code){
-            const stamp=Date.now();
-            if(!scanBusy&&!(code===lastScan&&stamp-lastScanAt<1600)){
-              scanBusy=true;
-              lastScan=code;
-              lastScanAt=stamp;
-              Promise.resolve(onBarcode(code)).catch(error=>{
-                message("scanMessage","Errore durante l'acquisizione: "+(error&&error.message?error.message:"riprova"));
-              }).finally(()=>setTimeout(()=>{scanBusy=false;},500));
-            }
-          }
-        }catch(e){
-          // Un fotogramma non leggibile non deve interrompere il ciclo di scansione.
-        }finally{
-          localScanBusy=false;
-        }
-      }
-      if(scanner)localScanFrame=requestAnimationFrame(tick);
+    scanner=new Html5Qrcode("reader", {verbose:false});
+    const formats=[
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.UPC_E,
+      Html5QrcodeSupportedFormats.CODE_128,
+      Html5QrcodeSupportedFormats.CODE_39,
+      Html5QrcodeSupportedFormats.ITF
+    ];
+    const config={
+      fps:12,
+      qrbox:(width,height)=>({
+        width:Math.max(180,Math.floor(width*0.92)),
+        height:Math.max(90,Math.floor(height*0.42))
+      }),
+      aspectRatio:1.777,
+      disableFlip:true,
+      formatsToSupport:formats,
+      rememberLastUsedCamera:true
     };
-    localScanFrame=requestAnimationFrame(tick);
+    await scanner.start({facingMode:"environment"},config,decodedText=>{
+      const code=normalizeBarcodeCode(decodedText);
+      const now=Date.now();
+      if(!code||(code===lastScan&&now-lastScanAt<1800)||scanBusy)return;
+      lastScan=code;
+      lastScanAt=now;
+      scanBusy=true;
+      Promise.resolve(onBarcode(code)).catch(error=>{
+        message("scanMessage","Errore durante l'acquisizione: "+(error&&error.message?error.message:"riprova"));
+      }).finally(()=>setTimeout(()=>{scanBusy=false;},500));
+    },()=>{});
+    button.textContent="Chiudi scanner";
     try{await prepareAudio();}catch(e){}
     try{await requestScreenWakeLock();}catch(e){}
-    message("scanMessage","Fotocamera attiva. Inquadra il codice EAN intero, in orizzontale, con buona luce.");
+    message("scanMessage","Fotocamera attiva. Inquadra il codice EAN intero, in orizzontale e a fuoco.");
   }catch(e){
-    await stopScanner();
+    try{if(scanner){await scanner.stop().catch(()=>{});await scanner.clear().catch(()=>{});}}catch(ignore){}
+    scanner=null;
+    reader.classList.add("hidden");
     $("results").classList.remove("hidden");
+    button.textContent="Apri fotocamera e scansiona";
     message("scanMessage","Scanner non avviato: "+scannerCameraError(e));
   }
 }
+
 async function stopScanner(){
-  if(localScanFrame)cancelAnimationFrame(localScanFrame);
-  localScanFrame=0;
-  if(localScanStream){
-    localScanStream.getTracks().forEach(track=>{try{track.stop();}catch(e){}});
-    localScanStream=null;
-  }
-  if(localScanVideo){
-    try{localScanVideo.pause();localScanVideo.srcObject=null;}catch(e){}
-    localScanVideo=null;
-  }
+  const active=scanner;
   scanner=null;
-  localScanBusy=false;
+  if(active){
+    try{await active.stop();}catch(e){}
+    try{await active.clear();}catch(e){}
+  }
   $("reader").classList.add("hidden");
   $("results").classList.remove("hidden");
+  $("startScan").textContent="Apri fotocamera e scansiona";
   await releaseScreenWakeLock();
   message("scanMessage","Scanner fermato.");
 }
+
 function normalizeBarcodeCode(value) {
   return String(value==null?"":value).normalize("NFKC").trim().replace(/[\s-]/g,"");
 }
@@ -723,7 +497,8 @@ async function mergeArticles(rows) {
 async function importCsv() {
   const file=$("csvFile").files[0];if(!file){alert("Seleziona un file CSV.");return;}
   try{const rows=parseCsv(await file.text());if(!rows.length)throw new Error("Nessun articolo riconosciuto.");
-    const n=await mergeArticles(rows);message("importMessage",n+" articoli importati o aggiornati.");}
+    const n=await mergeArticles(rows);localStorage.setItem("gestioneListiniNomeFile",file.name);refreshListinoInfo();
+    message("importMessage", "Listino " + file.name + ": " + n + " articoli importati o aggiornati.");}
   catch(e){message("importMessage","Errore CSV: "+e.message);}
 }
 async function importExcel() {
@@ -734,7 +509,8 @@ async function importExcel() {
     const rows=data.filter(r=>r.length>=2&&r[0]&&r[1]).map(r=>({code:String(r[0]).trim(),name:String(r[1]).trim(),currency:"EUR",
       price:String(r[3]||r[2]||"").replace(",", "."),originalFields:{columns:r}}));
     if(!rows.length)throw new Error("Nessun articolo riconosciuto.");const n=await mergeArticles(rows);
-    message("importMessage",n+" articoli importati o aggiornati.");}
+    localStorage.setItem("gestioneListiniNomeFile",file.name);refreshListinoInfo();
+    message("importMessage", "Listino " + file.name + ": " + n + " articoli importati o aggiornati.");}
   catch(e){message("importMessage","Errore Excel: "+e.message);}
 }
 
@@ -1227,59 +1003,16 @@ async function saveLanguage() {
 
 
 
-/* SCANNER DEDICATO: finestra separata collegata tramite postMessage */
-function openDedicatedScanner() {
-  if (!window.isSecureContext) {
-    message("scanMessage", "Lo scanner richiede HTTPS. Apri l'app dal suo indirizzo sicuro.");
-    return;
-  }
-  // window.open deve avvenire direttamente dal tocco del pulsante, soprattutto su iPhone.
-  const popup = window.open("./scanner/index.html", "gestioneListiniScanner");
-  if (!popup) {
-    message("scanMessage", "Il browser ha bloccato lo scanner. Consenti l'apertura della finestra per questo sito e riprova.");
-    return;
-  }
-  externalScannerWindow = popup;
-  message("scanMessage", "Scanner dedicato aperto. Inquadra il codice nella finestra dello scanner.");
-}
-window.addEventListener("message", async event => {
-  if (event.origin !== window.location.origin || !externalScannerWindow || event.source !== externalScannerWindow) return;
-  const data = event.data;
-  if (!data || typeof data.type !== "string") return;
-  if (data.type === "GESTIONE_LISTINI_BARCODE") {
-    const scanned = normalizeBarcodeCode(data.code);
-    if (!scanned) return;
-    const article = articles.find(x => normalizeBarcodeCode(x.code) === scanned);
-    const duplicate = !!article && currentItems.some(x => normalizeBarcodeCode(x.code) === scanned);
-    try {
-      await onBarcode(scanned);
-      event.source.postMessage({
-        type: "GESTIONE_LISTINI_SCAN_RESULT",
-        found: !!article,
-        duplicate,
-        name: article ? article.name : "",
-        price: article ? priceText(article) : ""
-      }, window.location.origin);
-    } catch (error) {
-      event.source.postMessage({type:"GESTIONE_LISTINI_SCAN_RESULT",found:false,error:true}, window.location.origin);
-      message("scanMessage", "Errore durante l'acquisizione del codice.");
-    }
-  } else if (data.type === "GESTIONE_LISTINI_SCAN_FINISH") {
-    externalScannerWindow = null;
-    message("scanMessage", "Scanner dedicato chiuso.");
-  }
-});
-
 /* EVENTI E AVVIO */
 $("createPassword").onclick=createPassword;$("unlockApp").onclick=unlockApp;
 $("addDepartment").onclick=saveCustomerDepartment;
 $("customer").onchange=async()=>{await refreshDepartments();if($("customer").value.trim())message("customerMessage","Cliente selezionato. Il reparto è facoltativo.");};
 $("customer").oninput=refreshDepartments;
-$("search").oninput=renderResults;$("startScan").onclick=startScanner;$("stopScan").onclick=stopScanner;$("openDedicatedScanner").onclick=openDedicatedScanner;
+$("search").oninput=renderResults;$("startScan").onclick=startScanner;
 $("showManual").onclick=async()=>{if(await ensureCustomer())$("manualAdd").classList.remove("hidden");};
 $("addManual").onclick=addManual;
 $("readPdf").onclick=readPdf;$("confirmPdfImport").onclick=confirmPdfImport;$("cancelPdfImport").onclick=cancelPdfImport;
-$("importCsv").onclick=importCsv;$("importExcel").onclick=importExcel;
+$("importCsv").onclick=importCsv;$("importExcel").onclick=importExcel;$("csvFile").onchange=()=>showSelectedImportFile("csvFile","csvSelectedName","Nessun file CSV selezionato.");$("excelFile").onchange=()=>showSelectedImportFile("excelFile","excelSelectedName","Nessun file Excel selezionato.");
 $("saveChoice").onclick=saveChoice;$("newChoice").onclick=newChoice;$("printDocument").onclick=printDocument;$("emailDocument").onclick=emailDocument;
 $("savedSearch").oninput=renderSaved;
 $("previewClose").onclick=()=>{$("documentPreviewModal").classList.add("hidden");$("documentPreviewModal").setAttribute("aria-hidden","true");};
@@ -1301,6 +1034,6 @@ document.addEventListener("visibilitychange",async()=>{if(document.visibilitySta
       else{$("authGate").classList.remove("hidden");$("passwordLogin").classList.remove("hidden");}
     }else{$("authGate").classList.remove("hidden");$("passwordSetup").classList.remove("hidden");}
     newChoice();
-    if("serviceWorker"in navigator){try{await navigator.serviceWorker.register("./sw.js?v=12");}catch(e){console.warn("Service worker non registrato",e);}}
+    if("serviceWorker"in navigator){try{await navigator.serviceWorker.register("./sw.js?v=13");}catch(e){console.warn("Service worker non registrato",e);}}
   }catch(e){alert("Errore inizializzazione archivio: "+e.message);}
 })();

@@ -1,41 +1,24 @@
-GESTIONE LISTINI — PROTOTIPO OFFLINE
+GESTIONE LISTINI — VERSIONE DI PROVA v13
 
-ATTENZIONE
-Questo è un prototipo tecnico separato dall'app Apps Script attualmente in uso.
-NON sostituisce né modifica la vecchia applicazione.
-NON sincronizza ancora clienti, listini o scelte con Google.
-NON contiene ancora login/ruoli, PDF/email definitivi, importazione PDF o archivio condiviso.
+Questa versione mantiene le funzioni dell'app e modifica il solo sistema di scansione.
 
-COSA È GIÀ PRESENTE NEL PROTOTIPO
-- PWA installabile su hosting HTTPS (es. GitHub Pages).
-- Service worker per memorizzare l'interfaccia.
-- IndexedDB per salvare listino, scelte e bozze sul dispositivo.
-- Ricerca listino offline.
-- Scelta con cliente, data, note generali, quantità e note per articolo.
-- Articolo non trovato inseribile manualmente nella sola scelta corrente.
-- Scanner basato su html5-qrcode; il service worker tenta di memorizzare la libreria al primo accesso online.
+SCANNER
+- C'è un solo pulsante: "Apri fotocamera e scansiona".
+- Il lettore usa html5-qrcode, incluso localmente nella cartella scanner.
+- Non apre una finestra separata e non carica la libreria da Internet.
+- Supporta EAN-13, EAN-8, UPC-A, UPC-E, Code 128, Code 39 e ITF.
+- Premi di nuovo il pulsante per chiudere lo scanner.
 
-REQUISITI / LIMITI DA VERIFICARE
-- Aprire una prima volta l'app con Internet e attendere il caricamento completo prima di provare offline.
-- La fotocamera richiede HTTPS e autorizzazione del browser.
-- iOS può avere differenze tra Safari installato e browser integrati; va testato su dispositivi reali.
-- La cache della libreria esterna è best-effort: il collaudo deve confermare che la libreria sia effettivamente disponibile dopo aver disattivato la rete.
-- I dati IndexedDB sono locali al browser/dispositivo: cancellazione dati del browser o cambio dispositivo può comportare perdita. Usare periodicamente "Esporta dati locali".
-- L'invio email e la sincronizzazione richiedono Internet.
+PROVA ONLINE/OFFLINE
+1. Pubblica questa versione nel repository di prova, non in quello originale.
+2. Apri l'app una prima volta con Internet e attendi il caricamento completo.
+3. Consenti l'accesso alla fotocamera.
+4. Prova un codice EAN-13 e uno EAN-8.
+5. Poi disattiva la rete e riprova dopo aver verificato che l'app sia stata memorizzata.
 
-FORMATO CSV ATTESO
-Colonne: codice,nome,valuta,prezzo
-Esempio:
-12345678,Articolo dimostrativo,EUR,12.50
+NOTA IMPORTANTE
+Sono stati controllati i collegamenti ai file locali e la sintassi JavaScript.
+La lettura con fotocamera fisica su iPhone non può essere certificata senza
+una prova reale sul dispositivo.
 
-PROSSIMA FASE
-Collegare questo archivio locale al backend Apps Script esistente con una sincronizzazione autenticata e gestire conflitti/backup prima di sostituire l'app corrente.
-
-
-AGGIORNAMENTO v12
-Lo scanner dedicato è incluso nella cartella scanner e si apre dal pulsante
-"Apri scanner dedicato" dentro Gestione Listini. Non aprire scanner/index.html
-direttamente: deve essere aperto dall'app, così può inviare i codici letti
-all'applicazione. È disponibile anche lo scanner integrato come alternativa.
-Per l'uso offline aprire prima l'app online e attendere che la cache sia
-completata. La fotocamera richiede HTTPS e autorizzazione del browser.
+Non sostituire il repository originale.

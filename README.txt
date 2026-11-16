@@ -92,3 +92,14 @@ VERIFICHE E LIMITI DELLA REVISIONE v12
 - Controllati i riferimenti agli elementi HTML richiamati dall'app.
 - Non eseguito test reale con fotocamera fisica iPhone: permessi, apertura popup
   e decodifica ottica devono essere confermati sul dispositivo.
+
+REVISIONE SCANNER v13
+- Unificato l'avvio in un solo pulsante nell'app.
+- Il pulsante usa direttamente html5-qrcode, caricato dalla cartella locale ./scanner/:
+  non apre popup e non dipende da una CDN per la decodifica dei codici.
+- La lettura gestisce EAN-13, EAN-8, UPC-A, UPC-E, Code 128, Code 39 e ITF.
+- La libreria locale è inclusa nella cache del service worker per l'uso offline,
+  dopo la prima apertura online e il completamento della cache.
+- Rimane necessario verificare la lettura ottica su iPhone fisico; la sintassi
+  e i collegamenti locali sono stati controllati, ma non equivalgono a una prova
+  reale della fotocamera.
