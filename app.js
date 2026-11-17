@@ -377,7 +377,8 @@ async function releaseScreenWakeLock() {
   screenWakeLock=null;
 }
 
-/* SCANNER: html5-qrcode locale, incluso nel progetto e disponibile offline */
+/* SCANNER: html5-qrcode locale. Configurazione allineata alla pagina scanner dedicata,
+   che usa una zona di lettura ampia per i codici a barre lineari su iPhone. */
 function scannerCameraError(error) {
   const name=error&&error.name?error.name:"";
   if(name==="NotAllowedError"||name==="PermissionDeniedError")
@@ -392,10 +393,7 @@ function scannerCameraError(error) {
 }
 
 async function startScanner() {
-  if(scanner){
-    await stopScanner();
-    return;
-  }
+  if(scanner){ await stopScanner(); return; }
   if(!window.isSecureContext){
     message("scanMessage","La fotocamera richiede HTTPS. Apri l'app dal suo indirizzo GitHub Pages.");
     return;
@@ -405,15 +403,22 @@ async function startScanner() {
     return;
   }
 
-  const reader=$("reader");
+  const reader=$("reader"), button=$("startScan");
   reader.classList.remove("hidden");
   $("results").classList.add("hidden");
-  message("scanMessage","Richiesta accesso alla fotocamera…");
-  const button=$("startScan");
+  button.disabled=true;
+  message("scanMessage","Avvio fotocamera e lettore codici…");
   try{
-    scanner=new Html5Qrcode("reader", {
-      verbose:false,
-      useBarCodeDetectorIfSupported:false,
+    // Le opzioni di lettura sono passate a start(), come nella pagina scanner
+    // dedicata inclusa nel progetto. Evitiamo vincoli video rigidi che su alcuni
+    // Safari iOS possono aprire la camera ma impedire l'analisi dei fotogrammi.
+    scanner=new Html5Qrcode("reader");
+    const config={
+      fps:20,
+      qrbox:(viewfinderWidth,viewfinderHeight)=>({
+        width:Math.floor(viewfinderWidth*0.94),
+        height:Math.floor(viewfinderHeight*0.58)
+      }),
       formatsToSupport:[
         Html5QrcodeSupportedFormats.EAN_13,
         Html5QrcodeSupportedFormats.EAN_8,
@@ -422,41 +427,29 @@ async function startScanner() {
         Html5QrcodeSupportedFormats.CODE_128,
         Html5QrcodeSupportedFormats.CODE_39,
         Html5QrcodeSupportedFormats.ITF
-      ]
-    });
-    const config={
-      fps:10,
-      aspectRatio:1.777,
-      disableFlip:false,
-      videoConstraints:{
-        facingMode:{ideal:"environment"},
-        width:{ideal:1920},
-        height:{ideal:1080}
-      }
+      ],
+      rememberLastUsedCamera:true
     };
-    // Senza qrbox: il decoder analizza tutto il fotogramma, non una finestrella
-    // piccola che può tagliare le barre di un EAN lungo.
     await scanner.start({facingMode:"environment"},config,decodedText=>{
-      const code=normalizeBarcodeCode(decodedText);
-      const now=Date.now();
+      const code=normalizeBarcodeCode(decodedText), now=Date.now();
       if(!code||(code===lastScan&&now-lastScanAt<1800)||scanBusy)return;
-      lastScan=code;
-      lastScanAt=now;
-      scanBusy=true;
+      lastScan=code; lastScanAt=now; scanBusy=true;
       Promise.resolve(onBarcode(code)).catch(error=>{
-        message("scanMessage","Errore durante la lettura: "+(error&&error.message?error.message:"riprova"));
+        message("scanMessage","Errore durante la ricerca dell'articolo: "+(error&&error.message?error.message:"riprova"));
       }).finally(()=>setTimeout(()=>{scanBusy=false;},500));
     },()=>{});
     button.textContent="Chiudi scanner";
+    button.disabled=false;
     try{await prepareAudio();}catch(e){}
     try{await requestScreenWakeLock();}catch(e){}
-    message("scanMessage","Fotocamera attiva. Inquadra tutto il codice a barre, orizzontale e a fuoco. Avvicina il telefono finché le barre risultano nitide.");
+    message("scanMessage","Scanner attivo: centra il codice a barre nella cornice, in orizzontale, e attendi la messa a fuoco. Il nome dell'articolo apparirà dopo la lettura.");
   }catch(e){
     try{if(scanner){await scanner.stop().catch(()=>{});await scanner.clear().catch(()=>{});}}catch(ignore){}
     scanner=null;
     reader.classList.add("hidden");
     $("results").classList.remove("hidden");
     button.textContent="Apri fotocamera e scansiona";
+    button.disabled=false;
     message("scanMessage","Scanner non avviato: "+scannerCameraError(e));
   }
 }
@@ -1077,6 +1070,6 @@ document.addEventListener("visibilitychange",async()=>{if(document.visibilitySta
       else{$("authGate").classList.remove("hidden");$("passwordLogin").classList.remove("hidden");}
     }else{$("authGate").classList.remove("hidden");$("passwordSetup").classList.remove("hidden");}
     newChoice();
-    if("serviceWorker"in navigator){try{await navigator.serviceWorker.register("./sw.js?v=15");}catch(e){console.warn("Service worker non registrato",e);}}
+    if("serviceWorker"in navigator){try{await navigator.serviceWorker.register("./sw.js?v=16");}catch(e){console.warn("Service worker non registrato",e);}}
   }catch(e){alert("Errore inizializzazione archivio: "+e.message);}
 })();
