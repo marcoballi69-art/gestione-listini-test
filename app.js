@@ -46,7 +46,17 @@ function removeRecord(name, key) {
 function norm(v) {
   return String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
-function codeKey(v) { return String(v || "").trim().replace(/^0+(?=\d)/, ""); }
+function codeKey(v) {
+  // Confronto canonico: gli zeri iniziali del codice a barre non fanno
+  // parte del codice articolo. Gestisce anche codici numerici importati
+  // da fogli Excel come "8602.0" senza alterare i dati originali.
+  let code = String(v == null ? "" : v).normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim().replace(/[\s\u00A0-]/g, "").toUpperCase();
+  if (/^\d+(?:[.,]0+)$/.test(code)) code = code.replace(/[.,]0+$/, "");
+  if (/^\d+$/.test(code)) return code.replace(/^0+(?=\d)/, "") || "0";
+  return code;
+}
 function priceText(a) {
   if (a.price === "" || a.price == null || !Number.isFinite(Number(a.price))) return "Prezzo non indicato";
   return "€ " + Number(a.price).toFixed(2).replace(".", ",");
@@ -476,17 +486,19 @@ async function stopScanner(){
 }
 
 function normalizeBarcodeCode(value) {
-  return String(value==null?"":value).normalize("NFKC").trim().replace(/[\s-]/g,"");
+  return String(value == null ? "" : value).normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim().replace(/[\s\u00A0-]/g, "");
 }
 async function onBarcode(code) {
   const scanned=normalizeBarcodeCode(code);
   const a=articles.find(x=>{
     const stored=normalizeBarcodeCode(x.code);
     if(!stored||!scanned)return false;
-    // I codici numerici del listino possono essere salvati senza gli zeri
-    // iniziali stampati dal barcode (es. 00008602 e 8602). Confrontiamo
-    // la forma canonica senza zeri iniziali, preservando almeno uno zero.
-    return codeKey(stored)===codeKey(scanned);
+    // Regola generale per tutti gli articoli: gli zeri iniziali del codice
+    // letto vengono ignorati nel confronto (es. 00008602 = 8602).
+    // Il valore originale del listino non viene modificato.
+    return codeKey(stored) === codeKey(scanned);
   });
   if(a) {
     lastMatchedScanCode = codeKey(a.code);
