@@ -62,10 +62,53 @@ function message(id, text) { if ($(id)) $(id).textContent = t(text); }
 async function customersData() { const data = await getValue("meta", "customers"); return data ? data.value : []; }
 async function saveCustomers(data) { await put("meta", { key: "customers", value: data }); }
 async function refreshCustomers() {
-  const data = await customersData(), options = $("customerOptions");
-  options.replaceChildren();
-  data.forEach(c => { const o = document.createElement("option"); o.value = c.name; options.append(o); });
   await refreshDepartments();
+  await renderCustomerMatches();
+}
+function appendCustomerHighlight(host, value, query) {
+  const text = String(value || ""), q = String(query || "");
+  const at = q ? text.toLocaleLowerCase("it").indexOf(q.toLocaleLowerCase("it")) : -1;
+  if (at < 0) { host.append(document.createTextNode(text)); return; }
+  host.append(document.createTextNode(text.slice(0, at)));
+  const mark = document.createElement("span"); mark.className = "customer-match-highlight";
+  mark.textContent = text.slice(at, at + q.length); host.append(mark);
+  host.append(document.createTextNode(text.slice(at + q.length)));
+}
+async function renderCustomerMatches() {
+  const host = $("customerMatches");
+  if (!host) return;
+  const query = $("customer").value.trim(), key = norm(query);
+  host.replaceChildren();
+  if (!key) { host.classList.add("hidden"); return; }
+  const data = await customersData();
+  const matches = data.filter(c => norm(c.name).includes(key) || (c.departments || []).some(d => norm(d).includes(key))).slice(0, 12);
+  if (!matches.length) { host.classList.add("hidden"); return; }
+  const heading = document.createElement("div"); heading.className = "customer-match-heading";
+  heading.textContent = "Clienti già presenti — seleziona il nominativo e l'eventuale reparto"; host.append(heading);
+  matches.forEach(c => {
+    const options = ["", ...(c.departments || [])];
+    options.forEach(dep => {
+      const button = document.createElement("button"); button.type = "button"; button.className = "customer-match-option";
+      const name = document.createElement("span"); name.className = "customer-match-name";
+      appendCustomerHighlight(name, c.name, query); button.append(name);
+      if (dep) {
+        const suffix = document.createElement("span"); suffix.className = "customer-match-department";
+        suffix.textContent = " — Rep. " + dep; button.append(suffix);
+      } else {
+        const suffix = document.createElement("span"); suffix.className = "customer-match-department";
+        suffix.textContent = " — senza reparto"; button.append(suffix);
+      }
+      button.onclick = async () => {
+        $("customer").value = c.name;
+        await refreshDepartments();
+        $("department").value = dep;
+        host.classList.add("hidden");
+        message("customerMessage", "Cliente già presente: " + c.name + (dep ? " — reparto " + dep : " — senza reparto") + ".");
+      };
+      host.append(button);
+    });
+  });
+  host.classList.remove("hidden");
 }
 async function refreshDepartments() {
   const data = await customersData(), customer = norm($("customer").value), selected = $("department").value;
@@ -86,6 +129,7 @@ async function saveCustomerDepartment() {
   if (!c.departments.includes(department)) c.departments.push(department);
   await saveCustomers(data); $("newDepartment").value = "";
   await refreshCustomers(); $("department").value = department;
+  await renderCustomerMatches();
   message("customerMessage", "Cliente e reparto salvati.");
 }
 async function ensureCustomer() {
@@ -148,7 +192,7 @@ function addArticle(a) {
     message("scanMessage", "Articolo già presente nella scelta: " + a.name + " — " + priceText(a));
     return false;
   }
-  currentItems.push({ code:a.code, name:a.name, price:a.price, currency:a.currency || "EUR", quantity:"1", note:"", originalFields:a.originalFields || {}, manual:false });
+  currentItems.push({ code:a.code, name:a.name, price:a.price, currency:a.currency || "EUR", quantity:"", quantitySet:false, note:"", originalFields:a.originalFields || {}, manual:false });
   renderChoice(); autosaveDraft(); return true;
 }
 
@@ -162,8 +206,11 @@ function renderChoice() {
     const details = document.createElement("div"); details.className = "muted";
     details.textContent = (item.code ? t("Codice ") + item.code + " · " : "") + priceText(item);
     const grid = document.createElement("div"); grid.className = "itemgrid";
-    const qty = document.createElement("input"); qty.value = item.quantity || "1"; qty.placeholder = "Quantità / metri";
-    qty.onchange = () => { item.quantity = qty.value; autosaveDraft(); };
+    const qty = document.createElement("input");
+    // I vecchi "1" erano valori automatici: non mostrarli come quantità.
+    if (item.quantity === "1" && item.quantitySet !== true) item.quantity = "";
+    qty.value = item.quantity || ""; qty.placeholder = "Metri (facoltativo)";
+    qty.onchange = () => { item.quantity = qty.value.trim(); item.quantitySet = !!item.quantity; autosaveDraft(); };
     const remove = document.createElement("button"); remove.className = "danger"; remove.textContent = "Rimuovi";
     remove.onclick = () => {
       const removed = currentItems[index]; currentItems.splice(index,1);
@@ -209,8 +256,8 @@ function newChoice() {
   $("generalNote").value = "";
   $("commercialConditions").value = "";
   $("documentType").value = "summary";
-  $("includeDetails").checked = true;
-  $("includePrices").checked = true;
+  $("includeDetails").checked = false;
+  $("includePrices").checked = false;
   $("manualAdd").classList.add("hidden");
   $("reader").classList.add("hidden");
   $("results").classList.remove("hidden");
@@ -290,8 +337,8 @@ async function renderSaved() {
       $("generalNote").value = c.note || "";
       $("commercialConditions").value = c.conditions || "";
       $("documentType").value = c.documentType || "summary";
-      $("includeDetails").checked = c.includeDetails !== false;
-      $("includePrices").checked = c.includePrices !== false;
+      $("includeDetails").checked = c.includeDetails === true;
+      $("includePrices").checked = c.includePrices === true;
       currentItems = c.items || [];
       recentScans = [];
       renderChoice();
@@ -344,7 +391,7 @@ async function addManual() {
   if (!await ensureCustomer()) return;
   const name=$("manualName").value.trim(); if(!name){alert("Inserisci il nome dell'articolo.");return;}
   currentItems.push({code:"",name,price:$("manualPrice").value||"",currency:"EUR",
-    quantity:$("manualQty").value.trim()||"1",note:$("manualNote").value.trim(),originalFields:{},manual:true});
+    quantity:$("manualQty").value.trim(),quantitySet:!!$("manualQty").value.trim(),note:$("manualNote").value.trim(),originalFields:{},manual:true});
   $("manualName").value=""; $("manualPrice").value=""; $("manualQty").value=""; $("manualNote").value="";
   $("manualAdd").classList.add("hidden"); renderChoice(); autosaveDraft();
 }
@@ -513,7 +560,7 @@ async function onBarcode(code) {
   // iniziale. Nessun bip e nessuna evidenziazione di errore in rosso.
   const scanStatus = $("scanMessage");
   if (scanStatus) scanStatus.className = "status";
-  message("scanMessage", "Articolo non presente nel listino caricato: inseriscilo manualmente.");
+  message("scanMessage", "Articolo non in listino. Scrivere l'articolo a mano.");
   $("manualAdd").classList.remove("hidden");
   $("manualName").value = ""; $("manualQty").value = ""; $("manualName").focus();
 }
@@ -642,23 +689,27 @@ function cancelPdfImport(){
 
 /* DOCUMENTO */
 function escapeHtml(value){return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+function optionalMeters(item) {
+  const value = String(item && item.quantity != null ? item.quantity : "").trim();
+  if (value === "1" && !(item && item.quantitySet === true)) return "";
+  return value;
+}
+function itemOriginalDetails(item) {
+  const f = item.originalFields || {};
+  return [f.composition, f.weight, f.height, f.fullDescription]
+    .filter(v => typeof v === "string" && v.trim())
+    .filter((v, i, arr) => arr.findIndex(x => norm(x) === norm(v)) === i)
+    .filter(v => !norm(item.name) || !norm(v).includes(norm(item.name)))
+    .join(" · ");
+}
 function buildDocumentHtml() {
   const c = choicePayload();
   let rows = "";
+  const hasMeters = c.items.some(item => !!optionalMeters(item));
   c.items.forEach(item => {
-    const f = item.originalFields || {};
-    const detailsRaw = c.includeDetails
-      ? [f.composition, f.weight, f.height, f.fullDescription]
-      : [];
-    const seen = new Set([norm(item.name)]);
-    const details = detailsRaw.filter(v => {
-      if (typeof v !== "string" || !v.trim()) return false;
-      const key = norm(v);
-      if (!key || seen.has(key) || (norm(item.name) && key.includes(norm(item.name)))) return false;
-      seen.add(key);
-      return true;
-    }).join(" · ");
-    rows += `<tr><td>${escapeHtml(item.name)}${details ? `<br><small>${escapeHtml(details)}</small>` : ""}${item.note ? `<br><small><b>${t("Nota:")}</b> ${escapeHtml(item.note)}</small>` : ""}</td><td>${escapeHtml(item.quantity || "1")}</td>${c.includePrices ? `<td>${escapeHtml(priceText(item))}</td>` : ""}</tr>`;
+    const details = c.includeDetails ? itemOriginalDetails(item) : "";
+    const metersCell = hasMeters ? `<td>${escapeHtml(optionalMeters(item))}</td>` : "";
+    rows += `<tr><td>${escapeHtml(item.name)}${details ? `<br><small>${escapeHtml(details)}</small>` : ""}${item.note ? `<br><small><b>${t("Nota:")}</b> ${escapeHtml(item.note)}</small>` : ""}</td>${metersCell}${c.includePrices ? `<td>${escapeHtml(priceText(item))}</td>` : ""}</tr>`;
   });
   const title = t("SELEZIONE N.") + " " + (c.number || "—");
   return `<!doctype html><html lang="${currentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title>
@@ -670,7 +721,7 @@ function buildDocumentHtml() {
   </style></head><body>
   <h1>${escapeHtml(title)}</h1>
   <div class="meta"><b>${t("Cliente:")}</b> ${escapeHtml(c.customer)}<br><b>${t("Data:")}</b> ${escapeHtml(c.date)}${c.department ? `<br><b>${t("Reparto:")}</b> ${escapeHtml(c.department)}` : ""}</div>
-  <table><thead><tr><th>${t("Articolo")}</th><th>${t("Quantità")}</th>${c.includePrices ? `<th>${t("Prezzo")}</th>` : ""}</tr></thead><tbody>${rows}</tbody></table>
+  <table><thead><tr><th>${t("Articolo")}</th>${hasMeters ? `<th>Metri</th>` : ""}${c.includePrices ? `<th>${t("Prezzo")}</th>` : ""}</tr></thead><tbody>${rows}</tbody></table>
   ${c.note ? `<h3>${t("Note generali")}</h3><p class="notes">${escapeHtml(c.note)}</p>` : ""}
   </body></html>`;
 }
@@ -693,7 +744,13 @@ async function emailDocument() {
   const c = choicePayload();
   const subject = encodeURIComponent(t("Selezione N. ") + c.number + " - " + c.customer);
   const lines = c.items.map(i => {
-    const bits = [i.name, t("Quantità:") + " " + (i.quantity || "1")];
+    const bits = [i.name];
+    const meters = optionalMeters(i);
+    if (meters) bits.push("Metri: " + meters);
+    if (c.includeDetails) {
+      const details = itemOriginalDetails(i);
+      if (details) bits.push(details);
+    }
     if (c.includePrices) bits.push(priceText(i));
     if (i.note && i.note.trim()) bits.push(t("Nota:") + " " + i.note.trim());
     return bits.join(" | ");
@@ -1063,8 +1120,13 @@ async function saveLanguage() {
 /* EVENTI E AVVIO */
 $("createPassword").onclick=createPassword;$("unlockApp").onclick=unlockApp;
 $("addDepartment").onclick=saveCustomerDepartment;
-$("customer").onchange=async()=>{await refreshDepartments();if($("customer").value.trim())message("customerMessage","Cliente selezionato. Il reparto è facoltativo.");};
-$("customer").oninput=refreshDepartments;
+$("customer").onchange=async()=>{await refreshDepartments();await renderCustomerMatches();if($("customer").value.trim())message("customerMessage","Controlla i clienti già presenti nell'elenco, se compaiono.");};
+$("customer").oninput=async()=>{await refreshDepartments();await renderCustomerMatches();};
+$("customer").onfocus=renderCustomerMatches;
+document.addEventListener("click", event => {
+  const matches = $("customerMatches");
+  if (matches && !matches.contains(event.target) && event.target !== $("customer")) matches.classList.add("hidden");
+});
 $("search").oninput=renderResults;$("startScan").onclick=startScanner;
 $("showManual").onclick=async()=>{if(await ensureCustomer())$("manualAdd").classList.remove("hidden");};
 $("addManual").onclick=addManual;

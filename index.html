@@ -87,6 +87,15 @@ input,select,textarea{min-height:50px;font-size:1rem}
 #reader video{display:block;width:100%!important;max-width:100%!important;height:auto!important;min-height:220px;max-height:48vh;object-fit:cover!important;background:#000;border-radius:10px}
 #reader__scan_region{width:100%;min-height:220px}
 #reader__scan_region video{width:100%!important;height:auto!important;object-fit:cover!important}
+
+.customer-matches{margin:6px 0 10px;border:1px solid #dce5ef;border-radius:10px;overflow:hidden;background:#fff;max-height:260px;overflow-y:auto}
+.customer-match-heading{padding:8px 10px;background:#f1f5f9;color:#475569;font-size:.85rem;font-weight:700}
+.customer-match-option{display:block;width:100%;text-align:left;margin:0;border-radius:0;background:#fff;color:#1f2937;border-bottom:1px solid #e5eaf0;min-height:42px;padding:9px 11px;font-weight:500}
+.customer-match-option:hover{background:#f8fafc}
+.customer-match-name{font-weight:750}
+.customer-match-highlight{color:#b42318;font-weight:850}
+.customer-match-department{color:#475569;font-size:.9rem}
+
 </style>
 </head>
 <body>
@@ -113,7 +122,7 @@ input,select,textarea{min-height:50px;font-size:1rem}
 </header>
 
 <section class="panel">
-  <h2>1. Scegli cliente</h2><label for="customer">Cliente</label><input id="customer" type="text" list="customerOptions" placeholder="Seleziona o inserisci il cliente"><datalist id="customerOptions"></datalist>
+  <h2>1. Scegli cliente</h2><label for="customer">Cliente</label><input id="customer" type="text" placeholder="Seleziona o inserisci il cliente"><div id="customerMatches" class="customer-matches hidden" aria-live="polite"></div>
   <div class="row"><div><label for="department">Reparto (facoltativo)</label><select id="department"><option value="">Nessun reparto / seleziona</option></select></div>
     <div><label for="newDepartment">Nuovo reparto</label><input id="newDepartment" type="text" placeholder="Nome reparto"></div></div>
   <button id="addDepartment" class="secondary">Aggiungi reparto al cliente</button><div id="customerMessage" class="status"></div>
@@ -131,15 +140,15 @@ input,select,textarea{min-height:50px;font-size:1rem}
   <h3>Articoli selezionati</h3><div id="choiceItems" class="muted">Nessun articolo selezionato.</div><div class="divider"></div>
   <div id="manualAdd" class="hidden"><h3>Inserimento articolo manuale</h3><p class="muted">L'articolo sarà inserito solo in questa scelta e non nel listino.</p>
     <label for="manualName">Nome articolo</label><input id="manualName" type="text"><label for="manualPrice">Prezzo</label><input id="manualPrice" type="number" min="0" step="0.01">
-    <label for="manualQty">Quantità / metraggio</label><input id="manualQty" type="text" placeholder="Es. 2 oppure 3,5 m"><label for="manualNote">Nota articolo</label><textarea id="manualNote"></textarea>
+    <label for="manualQty">Metri (facoltativo)</label><input id="manualQty" type="text" placeholder="Inserisci i metri solo se necessari"><label for="manualNote">Nota articolo</label><textarea id="manualNote"></textarea>
     <button id="addManual" class="success">Aggiungi articolo manuale</button></div>
   <button id="showManual" class="secondary">Inserisci articolo non presente nel listino</button>
   <label for="generalNote">Note generali della scelta</label><textarea id="generalNote" placeholder="Note aggiuntive..."></textarea>
 </section>
 <section class="panel">
   <h2>4. Salva e crea documento</h2><label for="documentType">Tipo documento</label><select id="documentType"><option value="summary">Riepilogo semplice</option><option value="offer">Offerta commerciale</option></select>
-  <label class="checkline"><input id="includePrices" type="checkbox" checked> Includi i prezzi nel documento e nell'email</label>
-  <label class="checkline"><input id="includeDetails" type="checkbox" checked> Includi i dettagli originali degli articoli disponibili</label>
+  <label class="checkline"><input id="includePrices" type="checkbox"> Includi i prezzi nel documento e nell'email</label>
+  <label class="checkline"><input id="includeDetails" type="checkbox"> Includi i dettagli originali degli articoli disponibili</label>
   <label for="commercialConditions">Condizioni commerciali</label><textarea id="commercialConditions" placeholder="Tempi, validità offerta, pagamento, consegna..."></textarea>
   <div class="row"><button id="saveChoice" class="success">Salva scelta</button><button id="newChoice" class="secondary">Nuova scelta</button></div>
   <div class="row"><button id="printDocument">Genera PDF / Stampa</button><button id="emailDocument" class="secondary">Prepara email</button></div><div id="documentMessage" class="status"></div>
