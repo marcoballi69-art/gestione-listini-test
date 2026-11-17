@@ -47,9 +47,8 @@ function norm(v) {
   return String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
 function codeKey(v) {
-  // Confronto canonico: gli zeri iniziali del codice a barre non fanno
-  // parte del codice articolo. Gestisce anche codici numerici importati
-  // da fogli Excel come "8602.0" senza alterare i dati originali.
+  // Gli zeri iniziali del codice a barre non fanno parte del codice articolo.
+  // Normalizza anche spazi, trattini e valori numerici importati come 8602.0.
   let code = String(v == null ? "" : v).normalize("NFKC")
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .trim().replace(/[\s\u00A0-]/g, "").toUpperCase();
@@ -336,7 +335,7 @@ function renderRecentScans() {
   if (!recentScans.length) return;
   const heading=document.createElement("div"); heading.className="muted"; heading.textContent="Ultimi 3 articoli scansionati"; host.append(heading);
   recentScans.forEach(a=>{
-    const row=document.createElement("div"); row.className="recent-scan scan-found-row";
+    const row=document.createElement("div"); row.className="recent-scan";
     const info=document.createElement("div"); info.className="recent-scan-info";
     const name=document.createElement("strong"); name.textContent=a.name;
     const price=document.createElement("div"); price.className="price"; price.textContent=priceText(a);
@@ -416,13 +415,9 @@ async function startScanner() {
 
   const reader=$("reader"), button=$("startScan");
   reader.classList.remove("hidden");
-  $("scanMessage").classList.remove("on");
   $("results").classList.add("hidden");
   button.disabled=true;
   message("scanMessage","Avvio fotocamera e lettore codici…");
-  // Sblocca Web Audio subito durante il tocco dell'utente: su Safari iOS
-  // il resume richiesto dopo l'avvio asincrono della fotocamera può essere ignorato.
-  const audioUnlock=prepareAudio();
   try{
     // Le opzioni di lettura sono passate a start(), come nella pagina scanner
     // dedicata inclusa nel progetto. Evitiamo vincoli video rigidi che su alcuni
@@ -449,15 +444,13 @@ async function startScanner() {
       const code=normalizeBarcodeCode(decodedText), now=Date.now();
       if(!code||(code===lastScan&&now-lastScanAt<1800)||scanBusy)return;
       lastScan=code; lastScanAt=now; scanBusy=true;
-      // Il BIP viene emesso solo se il codice corrisponde a un articolo del listino.
-      // Se il codice non viene trovato, non viene prodotto alcun suono.
       Promise.resolve(onBarcode(code)).catch(error=>{
         message("scanMessage","Errore durante la ricerca dell'articolo: "+(error&&error.message?error.message:"riprova"));
       }).finally(()=>setTimeout(()=>{scanBusy=false;},500));
     },()=>{});
     button.textContent="Chiudi scanner";
     button.disabled=false;
-    try{await audioUnlock;}catch(e){}
+    try{await prepareAudio();}catch(e){}
     try{await requestScreenWakeLock();}catch(e){}
     message("scanMessage","Scanner attivo: centra il codice a barre nella cornice, in orizzontale, e attendi la messa a fuoco. Il nome dell'articolo apparirà dopo la lettura.");
   }catch(e){
@@ -486,38 +479,30 @@ async function stopScanner(){
 }
 
 function normalizeBarcodeCode(value) {
-  return String(value == null ? "" : value).normalize("NFKC")
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
-    .trim().replace(/[\s\u00A0-]/g, "");
+  return String(value==null?"":value).normalize("NFKC").trim().replace(/[\s-]/g,"");
 }
 async function onBarcode(code) {
   const scanned=normalizeBarcodeCode(code);
-  const a=articles.find(x=>{
-    const stored=normalizeBarcodeCode(x.code);
-    if(!stored||!scanned)return false;
-    // Regola generale per tutti gli articoli: gli zeri iniziali del codice
-    // letto vengono ignorati nel confronto (es. 00008602 = 8602).
-    // Il valore originale del listino non viene modificato.
-    return codeKey(stored) === codeKey(scanned);
-  });
+  const scannedKey=codeKey(scanned);
+  const a=articles.find(x=>codeKey(x.code) === scannedKey && scannedKey !== "");
   if(a) {
     lastMatchedScanCode = codeKey(a.code);
     $("scanMessage").classList.add("on");
+    // Segnale acustico solo quando il codice corrisponde davvero a un articolo.
     beep();
-    renderResults();
     if(!await ensureCustomer()) {
-      message("scanMessage","CODICE LETTO: "+scanned+" — ARTICOLO: "+a.name+" — "+priceText(a)+". Seleziona prima il cliente per aggiungerlo alla scelta.");
+      message("scanMessage","TROVATO: "+a.name+" — "+priceText(a)+". Seleziona prima il cliente per aggiungerlo alla scelta.");
       return;
     }
     const added=addArticle(a);
     if (added) rememberRecentScan(a);
-    vibrateScan();
+    if (added) vibrateScan();
     message("scanMessage",(added?"TROVATO: ":"GIÀ PRESENTE: ")+a.name+" — "+priceText(a)+" (codice "+scanned+")");
+    renderResults();
     return;
   }
   lastMatchedScanCode = "";
   $("scanMessage").classList.remove("on");
-  renderResults();
   message("scanMessage","Codice letto: "+scanned+". Articolo non presente nel listino caricato: inseriscilo manualmente.");
   $("manualAdd").classList.remove("hidden");
   $("manualName").value=""; $("manualQty").value=""; $("manualName").focus();
