@@ -509,8 +509,11 @@ async function onBarcode(code) {
     message("scanMessage", (added ? "TROVATO: " : "GIÀ PRESENTE: ") + a.name + " — " + priceText(a) + " (codice " + scanned + ")");
     return;
   }
-  const sampleCodes = sources.slice(0, 6).map(x => String(x && x.code || "")).filter(Boolean).join(", ");
-  message("scanMessage", "Codice letto: " + scanned + " (confronto: " + scannedKey + "). Nessuna corrispondenza. Articoli in archivio: " + articles.length + "; righe PDF attivo: " + (activeListino && Array.isArray(activeListino.rows) ? activeListino.rows.length : 0) + ". Esempi codici: " + (sampleCodes || "nessuno") + ".");
+  // Codice non presente: ripristina il messaggio semplice della versione
+  // iniziale. Nessun bip e nessuna evidenziazione di errore in rosso.
+  const scanStatus = $("scanMessage");
+  if (scanStatus) scanStatus.className = "status";
+  message("scanMessage", "Articolo non presente nel listino caricato: inseriscilo manualmente.");
   $("manualAdd").classList.remove("hidden");
   $("manualName").value = ""; $("manualQty").value = ""; $("manualName").focus();
 }
