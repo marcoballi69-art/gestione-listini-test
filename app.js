@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 let db, articles = [], currentItems = [], currentChoiceId = null;
 let scanner = null, lastScan = "", pdfPreviewRows = [], activeListino = null, idleTimer = null;
 let currentLanguage = "it";
-let recentScans = [], scanBusy = false, lastScanAt = 0, audioContext = null, lastMatchedScanCode = "";
+let recentScans = [], scanBusy = false, lastScanAt = 0, audioContext = null;
 let screenWakeLock = null;
 const $ = id => document.getElementById(id);
 
@@ -47,14 +47,9 @@ function norm(v) {
   return String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
 function codeKey(v) {
-  // Gli zeri iniziali del codice a barre non fanno parte del codice articolo.
-  // Normalizza anche spazi, trattini e valori numerici importati come 8602.0.
-  let code = String(v == null ? "" : v).normalize("NFKC")
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
-    .trim().replace(/[\s\u00A0-]/g, "").toUpperCase();
+  let code = String(v == null ? "" : v).normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/g, "").trim().replace(/[\s\u00A0-]/g, "").toUpperCase();
   if (/^\d+(?:[.,]0+)$/.test(code)) code = code.replace(/[.,]0+$/, "");
-  if (/^\d+$/.test(code)) return code.replace(/^0+(?=\d)/, "") || "0";
-  return code;
+  return /^\d+$/.test(code) ? (code.replace(/^0+(?=\d)/, "") || "0") : code;
 }
 function priceText(a) {
   if (a.price === "" || a.price == null || !Number.isFinite(Number(a.price))) return "Prezzo non indicato";
@@ -144,7 +139,6 @@ function renderResults() {
   if (!found.length) { host.textContent = t("Nessun articolo trovato."); applyLanguage(); return; }
   found.forEach(a => {
     const div = document.createElement("div"); div.className = "article";
-    if (lastMatchedScanCode && codeKey(a.code) === lastMatchedScanCode) div.classList.add("scan-found-row");
     const name = document.createElement("strong"); name.textContent = a.name;
     const details = document.createElement("div"); details.className = "price"; details.textContent = t("Codice ") + a.code + " · " + priceText(a);
     const button = document.createElement("button"); button.textContent = "Aggiungi alla scelta";
@@ -482,30 +476,34 @@ function normalizeBarcodeCode(value) {
   return String(value==null?"":value).normalize("NFKC").trim().replace(/[\s-]/g,"");
 }
 async function onBarcode(code) {
-  const scanned=normalizeBarcodeCode(code);
-  const scannedKey=codeKey(scanned);
-  const a=articles.find(x=>codeKey(x.code) === scannedKey && scannedKey !== "");
-  if(a) {
-    lastMatchedScanCode = codeKey(a.code);
-    $("scanMessage").classList.add("on");
-    // Segnale acustico solo quando il codice corrisponde davvero a un articolo.
+  const scanned = codeKey(code);
+  // Cerca sia nell'archivio indicizzato sia nelle righe del PDF attivo:
+  // il PDF visualizzato è la fonte di verità anche se l'archivio articoli
+  // sul dispositivo non è stato aggiornato correttamente.
+  const candidates = [];
+  const seen = new Set();
+  for (const item of [...articles, ...((activeListino && Array.isArray(activeListino.rows)) ? activeListino.rows : [])]) {
+    if (!item || !item.code) continue;
+    const key = codeKey(item.code);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(item);
+  }
+  const a = candidates.find(item => codeKey(item.code) === scanned && scanned !== "");
+  if (a) {
     beep();
-    if(!await ensureCustomer()) {
-      message("scanMessage","TROVATO: "+a.name+" — "+priceText(a)+". Seleziona prima il cliente per aggiungerlo alla scelta.");
+    if (!await ensureCustomer()) {
+      message("scanMessage", "TROVATO: " + a.name + " — " + priceText(a) + ". Seleziona prima il cliente per aggiungerlo alla scelta.");
       return;
     }
-    const added=addArticle(a);
-    if (added) rememberRecentScan(a);
-    if (added) vibrateScan();
-    message("scanMessage",(added?"TROVATO: ":"GIÀ PRESENTE: ")+a.name+" — "+priceText(a)+" (codice "+scanned+")");
-    renderResults();
+    const added = addArticle(a);
+    if (added) { rememberRecentScan(a); vibrateScan(); }
+    message("scanMessage", (added ? "TROVATO: " : "GIÀ PRESENTE: ") + a.name + " — " + priceText(a) + " (codice " + scanned + ")");
     return;
   }
-  lastMatchedScanCode = "";
-  $("scanMessage").classList.remove("on");
-  message("scanMessage","Codice letto: "+scanned+". Articolo non presente nel listino caricato: inseriscilo manualmente.");
+  message("scanMessage", "Codice letto: " + String(code) + ". Articolo non presente nel listino caricato: inseriscilo manualmente.");
   $("manualAdd").classList.remove("hidden");
-  $("manualName").value=""; $("manualQty").value=""; $("manualName").focus();
+  $("manualName").value = ""; $("manualQty").value = ""; $("manualName").focus();
 }
 
 /* CSV / EXCEL */
@@ -1081,6 +1079,6 @@ document.addEventListener("visibilitychange",async()=>{if(document.visibilitySta
       else{$("authGate").classList.remove("hidden");$("passwordLogin").classList.remove("hidden");}
     }else{$("authGate").classList.remove("hidden");$("passwordSetup").classList.remove("hidden");}
     newChoice();
-    if("serviceWorker"in navigator){try{await navigator.serviceWorker.register("./sw.js?v=16");}catch(e){console.warn("Service worker non registrato",e);}}
+    if("serviceWorker"in navigator){try{await navigator.serviceWorker.register("./sw.js?v=21");}catch(e){console.warn("Service worker non registrato",e);}}
   }catch(e){alert("Errore inizializzazione archivio: "+e.message);}
 })();
