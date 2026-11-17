@@ -1,4 +1,4 @@
-GESTIONE LISTINI — VERSIONE DI PROVA v15
+GESTIONE LISTINI — VERSIONE DI PROVA v22
 
 MODIFICHE
 - Lo scanner usa la libreria html5-qrcode inclusa localmente.

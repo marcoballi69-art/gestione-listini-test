@@ -46,11 +46,7 @@ function removeRecord(name, key) {
 function norm(v) {
   return String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
-function codeKey(v) {
-  let code = String(v == null ? "" : v).normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/g, "").trim().replace(/[\s\u00A0-]/g, "").toUpperCase();
-  if (/^\d+(?:[.,]0+)$/.test(code)) code = code.replace(/[.,]0+$/, "");
-  return /^\d+$/.test(code) ? (code.replace(/^0+(?=\d)/, "") || "0") : code;
-}
+function codeKey(v) { return String(v || "").trim().replace(/^0+(?=\d)/, ""); }
 function priceText(a) {
   if (a.price === "" || a.price == null || !Number.isFinite(Number(a.price))) return "Prezzo non indicato";
   return "€ " + Number(a.price).toFixed(2).replace(".", ",");
@@ -475,33 +471,46 @@ async function stopScanner(){
 function normalizeBarcodeCode(value) {
   return String(value==null?"":value).normalize("NFKC").trim().replace(/[\s-]/g,"");
 }
+function scannerMatchKey(value) {
+  let s = String(value == null ? "" : value).normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim().replace(/[\s\u00A0-]/g, "").toUpperCase();
+  // Alcuni fogli di calcolo trasformano i codici numerici in 8602.0.
+  if (/^\d+[.,]0+$/.test(s)) s = s.replace(/[.,]0+$/, "");
+  // Codice barcode (es. 00008602) e codice listino (8602): confronta
+  // senza gli zeri iniziali, senza modificare il valore salvato.
+  if (/^\d+$/.test(s)) return s.replace(/^0+(?=\d)/, "");
+  return s;
+}
+
 async function onBarcode(code) {
-  const scanned = codeKey(code);
-  // Cerca sia nell'archivio indicizzato sia nelle righe del PDF attivo:
-  // il PDF visualizzato è la fonte di verità anche se l'archivio articoli
-  // sul dispositivo non è stato aggiornato correttamente.
-  const candidates = [];
-  const seen = new Set();
-  for (const item of [...articles, ...((activeListino && Array.isArray(activeListino.rows)) ? activeListino.rows : [])]) {
-    if (!item || !item.code) continue;
-    const key = codeKey(item.code);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    candidates.push(item);
-  }
-  const a = candidates.find(item => codeKey(item.code) === scanned && scanned !== "");
+  const scanned = normalizeBarcodeCode(code);
+  const scannedKey = scannerMatchKey(scanned);
+  // Cerca prima nell'archivio normalmente usato dall'app; usa anche le righe
+  // del PDF attivo e l'anteprima come fonti di riserva, senza dipendere dal
+  // fatto che IndexedDB e il riepilogo del PDF siano perfettamente allineati.
+  const sources = [
+    ...(Array.isArray(articles) ? articles : []),
+    ...(activeListino && Array.isArray(activeListino.rows) ? activeListino.rows : []),
+    ...(Array.isArray(pdfPreviewRows) ? pdfPreviewRows : [])
+  ];
+  const a = sources.find(x => {
+    const storedKey = scannerMatchKey(x && x.code);
+    return storedKey !== "" && scannedKey !== "" && storedKey === scannedKey;
+  });
   if (a) {
-    beep();
     if (!await ensureCustomer()) {
-      message("scanMessage", "TROVATO: " + a.name + " — " + priceText(a) + ". Seleziona prima il cliente per aggiungerlo alla scelta.");
+      message("scanMessage", "CODICE LETTO: " + scanned + " — ARTICOLO: " + a.name + " — " + priceText(a) + ". Seleziona prima il cliente per aggiungerlo alla scelta.");
       return;
     }
     const added = addArticle(a);
-    if (added) { rememberRecentScan(a); vibrateScan(); }
+    if (added) rememberRecentScan(a);
+    beep(); vibrateScan();
     message("scanMessage", (added ? "TROVATO: " : "GIÀ PRESENTE: ") + a.name + " — " + priceText(a) + " (codice " + scanned + ")");
     return;
   }
-  message("scanMessage", "Codice letto: " + String(code) + ". Articolo non presente nel listino caricato: inseriscilo manualmente.");
+  const sampleCodes = sources.slice(0, 6).map(x => String(x && x.code || "")).filter(Boolean).join(", ");
+  message("scanMessage", "Codice letto: " + scanned + " (confronto: " + scannedKey + "). Nessuna corrispondenza. Articoli in archivio: " + articles.length + "; righe PDF attivo: " + (activeListino && Array.isArray(activeListino.rows) ? activeListino.rows.length : 0) + ". Esempi codici: " + (sampleCodes || "nessuno") + ".");
   $("manualAdd").classList.remove("hidden");
   $("manualName").value = ""; $("manualQty").value = ""; $("manualName").focus();
 }
@@ -1079,6 +1088,6 @@ document.addEventListener("visibilitychange",async()=>{if(document.visibilitySta
       else{$("authGate").classList.remove("hidden");$("passwordLogin").classList.remove("hidden");}
     }else{$("authGate").classList.remove("hidden");$("passwordSetup").classList.remove("hidden");}
     newChoice();
-    if("serviceWorker"in navigator){try{await navigator.serviceWorker.register("./sw.js?v=21");}catch(e){console.warn("Service worker non registrato",e);}}
+    if("serviceWorker"in navigator){try{await navigator.serviceWorker.register("./sw.js?v=16");}catch(e){console.warn("Service worker non registrato",e);}}
   }catch(e){alert("Errore inizializzazione archivio: "+e.message);}
 })();
